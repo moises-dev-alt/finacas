@@ -275,6 +275,7 @@ function App() {
         'auth/email-already-in-use': 'Este e-mail ja possui cadastro.',
         'auth/invalid-email': 'Digite um e-mail valido.',
         'auth/invalid-credential': 'E-mail ou senha incorretos.',
+        'auth/configuration-not-found': 'Firebase Authentication ainda nao foi ativado neste projeto. Ative Authentication > E-mail/Senha no Console Firebase.',
         'auth/operation-not-allowed': 'Ative o provedor E-mail/Senha no Firebase Authentication.',
         'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
       };
