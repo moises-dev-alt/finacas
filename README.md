@@ -24,6 +24,16 @@ python backend/server.py
 
 A API usa SQLite e cria automaticamente o banco em `backend/financas.db`.
 
+## Pastas que nao sobem para o GitHub
+
+Algumas pastas ficam fora do repositorio de proposito:
+
+- `node_modules`: recriada com `npm install`
+- `dist`: recriada com `npm run build`
+- `.firebase`: cache local do Firebase
+- `backend/financas.db`: banco local gerado pela API
+- `backend/__pycache__`: cache do Python
+
 ## Integracao
 
 Em desenvolvimento, o React tenta usar:
