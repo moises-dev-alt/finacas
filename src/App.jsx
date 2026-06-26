@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Chart, registerables } from 'chart.js';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+} from 'firebase/auth';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 
 Chart.register(...registerables);
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const seedData = {
   incomes: [
@@ -66,23 +73,91 @@ function loadLocalData() {
   }
 }
 
-async function apiRequest(path, options) {
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  if (!response.ok) throw new Error('API indisponivel');
-  return response.json();
-}
-
 function Icon({ name }) {
   return <span className={`app-icon app-icon-${name}`} aria-hidden="true" />;
+}
+
+function userFinanceRef(userId) {
+  return doc(db, 'users', userId, 'finance', 'current');
+}
+
+function normalizeRemoteData(payload, user) {
+  return {
+    ...seedData,
+    ...payload,
+    incomes: payload?.incomes || seedData.incomes,
+    expenses: payload?.expenses || seedData.expenses,
+    bills: payload?.bills || seedData.bills,
+    goals: payload?.goals || seedData.goals,
+    settings: {
+      ...seedData.settings,
+      ...payload?.settings,
+      name: payload?.settings?.name || user.displayName || 'Usuario',
+      email: payload?.settings?.email || user.email || '',
+    },
+  };
+}
+
+function AuthPage({ mode, setMode, error, onSubmit }) {
+  const isRegister = mode === 'register';
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <div className="auth-brand">
+          <div className="brand-mark"><span /><span /><span /><span /></div>
+          <strong>Financas</strong>
+        </div>
+        <div>
+          <h1>{isRegister ? 'Criar conta' : 'Entrar'}</h1>
+          <p>{isRegister ? 'Cadastre seu acesso para salvar seus dados.' : 'Acesse seu painel financeiro.'}</p>
+        </div>
+        <form className="auth-form" onSubmit={onSubmit}>
+          {isRegister && (
+            <label>
+              Nome
+              <input name="name" autoComplete="name" placeholder="Seu nome" required />
+            </label>
+          )}
+          <label>
+            E-mail
+            <input name="email" type="email" autoComplete="email" placeholder="voce@email.com" required />
+          </label>
+          <label>
+            Senha
+            <input name="password" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} minLength="6" placeholder="******" required />
+          </label>
+          {error && <p className="auth-error">{error}</p>}
+          <button className="primary-button" type="submit">{isRegister ? 'Cadastrar' : 'Entrar'}</button>
+        </form>
+        <button className="auth-switch" type="button" onClick={() => setMode(isRegister ? 'login' : 'register')}>
+          {isRegister ? 'Ja tenho conta' : 'Criar cadastro'}
+        </button>
+      </section>
+      <section className="auth-preview" aria-hidden="true">
+        <div className="preview-card">
+          <span>Saldo Atual</span>
+          <strong>{formatCurrency(12540)}</strong>
+          <small>Sincronizado com Firebase</small>
+        </div>
+        <div className="preview-row">
+          <span />
+          <span />
+          <span />
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function App() {
   const [activePage, setActivePage] = useState('dashboard');
   const [data, setData] = useState(loadLocalData);
   const [apiOnline, setApiOnline] = useState(false);
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState('login');
+  const [authError, setAuthError] = useState('');
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ month: 'Junho', year: '2026', status: 'Todas', category: 'Todas' });
@@ -94,14 +169,43 @@ function App() {
   const charts = useRef({});
 
   useEffect(() => {
-    apiRequest('/api/finance')
-      .then(payload => {
-        setData(payload);
-        setSettingsDraft(payload.settings);
-        setApiOnline(true);
-      })
-      .catch(() => setApiOnline(false));
+    return onAuthStateChanged(auth, currentUser => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    async function loadFirebaseData() {
+      try {
+        const snapshot = await getDoc(userFinanceRef(user.uid));
+        const remoteData = snapshot.exists()
+          ? normalizeRemoteData(snapshot.data(), user)
+          : normalizeRemoteData(seedData, user);
+
+        if (!snapshot.exists()) {
+          await setDoc(userFinanceRef(user.uid), {
+            ...remoteData,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        setData(remoteData);
+        setSettingsDraft(remoteData.settings);
+        setApiOnline(true);
+      } catch {
+        const localData = normalizeRemoteData(loadLocalData(), user);
+        setData(localData);
+        setSettingsDraft(localData.settings);
+        setApiOnline(false);
+      }
+    }
+
+    loadFirebaseData();
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem('financeData', JSON.stringify(data));
@@ -150,12 +254,40 @@ function App() {
     charts.current.category.update();
   }, [categoryTotals]);
 
-  async function persist(nextData, path, payload) {
-    setData(nextData);
-    if (!path) return;
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+    setAuthError('');
+
+    const form = new FormData(event.currentTarget);
+    const name = form.get('name')?.toString().trim();
+    const email = form.get('email')?.toString().trim();
+    const password = form.get('password')?.toString();
+
     try {
-      const fresh = await apiRequest(path, { method: 'POST', body: JSON.stringify(payload) });
-      setData(fresh);
+      if (authMode === 'register') {
+        const credential = await createUserWithEmailAndPassword(auth, email, password);
+        if (name) await updateProfile(credential.user, { displayName: name });
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+    } catch (error) {
+      const messages = {
+        'auth/email-already-in-use': 'Este e-mail ja possui cadastro.',
+        'auth/invalid-email': 'Digite um e-mail valido.',
+        'auth/invalid-credential': 'E-mail ou senha incorretos.',
+        'auth/operation-not-allowed': 'Ative o provedor E-mail/Senha no Firebase Authentication.',
+        'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+      };
+      setAuthError(messages[error.code] || 'Nao foi possivel entrar agora.');
+    }
+  }
+
+  async function persist(nextData) {
+    setData(nextData);
+    localStorage.setItem('financeData', JSON.stringify(nextData));
+    if (!user) return;
+    try {
+      await setDoc(userFinanceRef(user.uid), { ...nextData, updatedAt: serverTimestamp() }, { merge: true });
       setApiOnline(true);
     } catch {
       setApiOnline(false);
@@ -173,7 +305,7 @@ function App() {
       value: Number(form.get('value')),
     };
     const key = type === 'income' ? 'incomes' : 'expenses';
-    persist({ ...data, [key]: [item, ...data[key]] }, `/api/${key}`, item);
+    persist({ ...data, [key]: [item, ...data[key]] });
     setModal(null);
   }
 
@@ -187,7 +319,7 @@ function App() {
       value: Number(form.get('value')),
       status: form.get('status'),
     };
-    persist({ ...data, bills: [item, ...data.bills] }, '/api/bills', item);
+    persist({ ...data, bills: [item, ...data.bills] });
     setModal(null);
   }
 
@@ -201,22 +333,36 @@ function App() {
       current: Number(form.get('current')),
       icon: 'goal',
     };
-    persist({ ...data, goals: [item, ...data.goals] }, '/api/goals', item);
+    persist({ ...data, goals: [item, ...data.goals] });
     setModal(null);
   }
 
   function deleteItem(key, id) {
     const next = { ...data, [key]: data[key].filter(item => item.id !== id) };
     persist(next);
-    apiRequest(`/api/${key}/${id}`, { method: 'DELETE' }).catch(() => setApiOnline(false));
   }
 
   function saveSettings(event) {
     event.preventDefault();
-    persist({ ...data, settings: settingsDraft }, '/api/settings', settingsDraft);
+    persist({ ...data, settings: settingsDraft });
   }
 
   const pageTitle = navItems.find(item => item.id === activePage)?.label || 'Dashboard';
+
+  if (authLoading) {
+    return <div className="loading-screen">Carregando...</div>;
+  }
+
+  if (!user) {
+    return (
+      <AuthPage
+        mode={authMode}
+        setMode={setAuthMode}
+        error={authError}
+        onSubmit={handleAuthSubmit}
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -238,7 +384,7 @@ function App() {
             </button>
           ))}
         </nav>
-        <button className="logout" type="button">⇱ Sair</button>
+        <button className="logout" type="button" onClick={() => signOut(auth)}>⇱ Sair</button>
       </aside>
 
       <main className="main-content">

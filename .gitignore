@@ -2,5 +2,6 @@ node_modules
 dist
 .DS_Store
 .firebase
+firebase-debug.log
 backend/financas.db
 backend/__pycache__/
