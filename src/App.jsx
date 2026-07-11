@@ -413,20 +413,55 @@ function downloadFile(filename, content, type) {
 }
 
 function LandingPage({ onLogin, onRegister }) {
+  const [activeView, setActiveView] = useState(() => {
+    if (typeof window === 'undefined') return 'home';
+    return normalizeLandingHash(window.location.hash);
+  });
+
+  useEffect(() => {
+    const syncHash = () => setActiveView(normalizeLandingHash(window.location.hash));
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, []);
+
+  function openLandingView(view) {
+    setActiveView(view);
+    window.history.pushState(null, '', `#${view}`);
+  }
+
   return (
-    <main className="landing-shell">
+    <main className={`landing-shell landing-view-${activeView}`}>
       <header className="landing-header">
-        <div className="auth-brand">
+        <button className="auth-brand landing-brand-button" type="button" onClick={() => openLandingView('home')}>
           <div className="brand-mark"><span /><span /><span /><span /></div>
           <strong>Finanças Pro</strong>
-        </div>
+        </button>
         <nav className="landing-nav">
-          <a href="#recursos">Recursos</a>
-          <a href="#preco">Planos</a>
+          <button className={activeView === 'home' ? 'active' : ''} type="button" onClick={() => openLandingView('home')}>Início</button>
+          <button className={activeView === 'recursos' ? 'active' : ''} type="button" onClick={() => openLandingView('recursos')}>Recursos</button>
+          <button className={activeView === 'planos' ? 'active' : ''} type="button" onClick={() => openLandingView('planos')}>Planos</button>
           <button className="secondary-button" type="button" onClick={onLogin}>Entrar</button>
         </nav>
       </header>
 
+      <div className="landing-page-frame" key={activeView}>
+        {activeView === 'home' && <LandingHome onLogin={onLogin} onRegister={onRegister} />}
+        {activeView === 'recursos' && <LandingResources onRegister={onRegister} />}
+        {activeView === 'planos' && <LandingPlans onLogin={onLogin} onRegister={onRegister} />}
+      </div>
+    </main>
+  );
+}
+
+function normalizeLandingHash(hash) {
+  const value = String(hash || '').replace('#', '');
+  if (value === 'preco') return 'planos';
+  return ['home', 'recursos', 'planos'].includes(value) ? value : 'home';
+}
+
+function LandingHome({ onLogin, onRegister }) {
+  return (
+    <>
       <section className="landing-hero">
         <div className="hero-copy">
           <span className="eyebrow">Controle financeiro para pequenos negócios</span>
@@ -444,29 +479,7 @@ function LandingPage({ onLogin, onRegister }) {
         </div>
 
         <div className="hero-showcase">
-          <div className="product-preview" aria-label="Prévia do painel financeiro">
-            <div className="preview-toolbar" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div className="preview-top">
-              <span>Saldo do mês</span>
-              <strong>{formatCurrency(12450)}</strong>
-            </div>
-            <div className="preview-bars">
-              <span style={{ '--bar-height': '52%', '--bar-delay': '0.05s' }} />
-              <span style={{ '--bar-height': '74%', '--bar-delay': '0.16s' }} />
-              <span style={{ '--bar-height': '46%', '--bar-delay': '0.27s' }} />
-              <span style={{ '--bar-height': '86%', '--bar-delay': '0.38s' }} />
-              <span style={{ '--bar-height': '63%', '--bar-delay': '0.49s' }} />
-            </div>
-            <div className="preview-metrics">
-              <p><span>Receitas</span><b className="positive">{formatCurrency(18500)}</b></p>
-              <p><span>Despesas</span><b className="negative">{formatCurrency(6050)}</b></p>
-              <p><span>Economia</span><b>{formatCurrency(12450)}</b></p>
-            </div>
-          </div>
+          <ProductPreview />
           <div className="preview-note preview-note-income">
             <small>Receita registrada</small>
             <strong>+ {formatCurrency(850)}</strong>
@@ -483,22 +496,76 @@ function LandingPage({ onLogin, onRegister }) {
         <div><strong>100%</strong><span>dados por usuário</span></div>
         <div><strong>CSV</strong><span>exportação Pro</span></div>
       </section>
+    </>
+  );
+}
 
-      <section className="landing-section" id="recursos">
+function ProductPreview() {
+  return (
+    <div className="product-preview" aria-label="Prévia do painel financeiro">
+      <div className="preview-toolbar" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="preview-top">
+        <span>Saldo do mês</span>
+        <strong>{formatCurrency(12450)}</strong>
+      </div>
+      <div className="preview-bars">
+        <span style={{ '--bar-height': '52%', '--bar-delay': '0.05s' }} />
+        <span style={{ '--bar-height': '74%', '--bar-delay': '0.16s' }} />
+        <span style={{ '--bar-height': '46%', '--bar-delay': '0.27s' }} />
+        <span style={{ '--bar-height': '86%', '--bar-delay': '0.38s' }} />
+        <span style={{ '--bar-height': '63%', '--bar-delay': '0.49s' }} />
+      </div>
+      <div className="preview-metrics">
+        <p><span>Receitas</span><b className="positive">{formatCurrency(18500)}</b></p>
+        <p><span>Despesas</span><b className="negative">{formatCurrency(6050)}</b></p>
+        <p><span>Economia</span><b>{formatCurrency(12450)}</b></p>
+      </div>
+    </div>
+  );
+}
+
+function LandingResources({ onRegister }) {
+  return (
+    <section className="landing-page landing-section landing-resources-page">
+      <div className="landing-page-hero">
         <div className="section-heading">
           <span className="eyebrow">Recursos</span>
-          <h2>Pronto para operar no dia a dia</h2>
+          <h1>Uma página só para mostrar o que o sistema entrega.</h1>
+          <p>Agora os recursos ficam em uma aba própria, com leitura mais limpa e um resumo visual do fluxo financeiro.</p>
         </div>
+        <button className="primary-button" type="button" onClick={onRegister}>Começar com esses recursos</button>
+      </div>
+
+      <div className="resources-layout">
         <div className="feature-grid">
           <article><span className="feature-icon">▥</span><b>Dashboard executivo</b><p>KPIs, últimas transações e comparativo de receitas e despesas.</p></article>
           <article><span className="feature-icon">▣</span><b>Gestão completa</b><p>Cadastre receitas, despesas, contas, metas, categorias e agendamentos.</p></article>
           <article><span className="feature-icon">◈</span><b>Segurança Firebase</b><p>Cada usuário acessa apenas os próprios dados no Firestore.</p></article>
           <article><span className="feature-icon">⇩</span><b>Exportação e backup</b><p>CSV para planilhas e backup JSON para portabilidade.</p></article>
         </div>
-      </section>
 
-      <section className="workflow-section">
-        <div className="section-heading">
+        <aside className="resource-demo-card" aria-label="Resumo animado de recursos">
+          <span className="eyebrow">Resumo mensal</span>
+          <div className="insight-chart">
+            <span style={{ '--bar-height': '46%', '--bar-delay': '0.08s' }} />
+            <span style={{ '--bar-height': '68%', '--bar-delay': '0.18s' }} />
+            <span style={{ '--bar-height': '58%', '--bar-delay': '0.28s' }} />
+            <span style={{ '--bar-height': '88%', '--bar-delay': '0.38s' }} />
+          </div>
+          <div className="resource-lines">
+            <p><span>Receitas</span><b>{formatCurrency(18500)}</b></p>
+            <p><span>Despesas</span><b>{formatCurrency(6050)}</b></p>
+            <p><span>Metas ativas</span><b>3</b></p>
+          </div>
+        </aside>
+      </div>
+
+      <div className="workflow-section">
+        <div className="section-heading compact">
           <span className="eyebrow">Fluxo</span>
           <h2>Menos tela parada, mais ação</h2>
         </div>
@@ -507,21 +574,53 @@ function LandingPage({ onLogin, onRegister }) {
           <article><b>2</b><span>Acompanhe contas e metas</span></article>
           <article><b>3</b><span>Exporte ou faça backup</span></article>
         </div>
-      </section>
+      </div>
+    </section>
+  );
+}
 
-      <section className="pricing-section" id="preco">
-        <div>
+function LandingPlans({ onLogin, onRegister }) {
+  return (
+    <section className="landing-page landing-plans-page">
+      <div className="landing-page-hero plans-hero">
+        <div className="section-heading">
           <span className="eyebrow">Oferta inicial</span>
-          <h2>Plano Pro</h2>
-          <p>Ideal para vender como sistema financeiro simples para autônomos, prestadores de serviço e pequenos negócios.</p>
+          <h1>Planos em uma aba separada, simples de comparar.</h1>
+          <p>Escolha entre começar grátis ou liberar recursos Pro para vender uma solução mais completa.</p>
         </div>
-        <div className="price-card">
-          <span>A partir de</span>
-          <strong>R$ 29/mês</strong>
-          <button className="primary-button" type="button" onClick={onRegister}>Criar acesso</button>
-        </div>
-      </section>
-    </main>
+        <button className="secondary-button" type="button" onClick={onLogin}>Entrar na minha conta</button>
+      </div>
+
+      <div className="public-plan-grid">
+        <article className="public-plan-card">
+          <span className="plan-badge">Para começar</span>
+          <h2>{plans.free.name}</h2>
+          <strong>{plans.free.price}</strong>
+          <p>{plans.free.description}</p>
+          <ul>
+            {plans.free.features.map(feature => <li key={feature}>{feature}</li>)}
+          </ul>
+          <button className="secondary-button" type="button" onClick={onRegister}>Criar conta grátis</button>
+        </article>
+
+        <article className="public-plan-card featured">
+          <span className="plan-badge pro">Mais completo</span>
+          <h2>{plans.pro.name}</h2>
+          <strong>{plans.pro.price}</strong>
+          <p>{plans.pro.description}</p>
+          <ul>
+            {plans.pro.features.map(feature => <li key={feature}>{feature}</li>)}
+          </ul>
+          <button className="primary-button" type="button" onClick={onRegister}>Criar acesso Pro</button>
+        </article>
+      </div>
+
+      <div className="plan-comparison">
+        <div><span>Transações</span><b>10 no Free / ilimitadas no Pro</b></div>
+        <div><span>Relatórios</span><b>Dashboard no Free / completos no Pro</b></div>
+        <div><span>Backup</span><b>Disponível no plano Pro</b></div>
+      </div>
+    </section>
   );
 }
 
