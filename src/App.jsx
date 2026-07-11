@@ -420,21 +420,21 @@ function LandingPage({ onLogin, onRegister }) {
           <div className="brand-mark"><span /><span /><span /><span /></div>
           <strong>Finanças Pro</strong>
         </div>
-        <nav>
+        <nav className="landing-nav">
           <a href="#recursos">Recursos</a>
-          <a href="#preco">Preço</a>
+          <a href="#preco">Planos</a>
           <button className="secondary-button" type="button" onClick={onLogin}>Entrar</button>
         </nav>
       </header>
 
       <section className="landing-hero">
         <div className="hero-copy">
-          <span className="eyebrow">Controle financeiro para pequenos negocios</span>
-          <h1>Organize receitas, despesas, contas e metas em um painel pronto para vender.</h1>
-          <p>Um sistema online com Firebase, relatórios, backups e dados separados por usuário para transformar controle financeiro em produto profissional.</p>
+          <span className="eyebrow">Controle financeiro para pequenos negócios</span>
+          <h1>Uma central financeira mais clara, rápida e pronta para vender.</h1>
+          <p>Organize receitas, despesas, contas e metas em uma experiência online com Firebase, relatórios e dados separados por usuário.</p>
           <div className="hero-actions">
             <button className="primary-button" type="button" onClick={onRegister}>Começar agora</button>
-            <button className="secondary-button" type="button" onClick={onLogin}>Ja tenho conta</button>
+            <button className="secondary-button" type="button" onClick={onLogin}>Já tenho conta</button>
           </div>
           <div className="trust-row">
             <span>Dados por usuário</span>
@@ -443,32 +443,69 @@ function LandingPage({ onLogin, onRegister }) {
           </div>
         </div>
 
-        <div className="product-preview" aria-label="Previa do painel financeiro">
-          <div className="preview-top">
-            <span>Saldo do mês</span>
-            <strong>{formatCurrency(12450)}</strong>
+        <div className="hero-showcase">
+          <div className="product-preview" aria-label="Prévia do painel financeiro">
+            <div className="preview-toolbar" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="preview-top">
+              <span>Saldo do mês</span>
+              <strong>{formatCurrency(12450)}</strong>
+            </div>
+            <div className="preview-bars">
+              <span style={{ '--bar-height': '52%', '--bar-delay': '0.05s' }} />
+              <span style={{ '--bar-height': '74%', '--bar-delay': '0.16s' }} />
+              <span style={{ '--bar-height': '46%', '--bar-delay': '0.27s' }} />
+              <span style={{ '--bar-height': '86%', '--bar-delay': '0.38s' }} />
+              <span style={{ '--bar-height': '63%', '--bar-delay': '0.49s' }} />
+            </div>
+            <div className="preview-metrics">
+              <p><span>Receitas</span><b className="positive">{formatCurrency(18500)}</b></p>
+              <p><span>Despesas</span><b className="negative">{formatCurrency(6050)}</b></p>
+              <p><span>Economia</span><b>{formatCurrency(12450)}</b></p>
+            </div>
           </div>
-          <div className="preview-bars">
-            <span style={{ height: '52%' }} />
-            <span style={{ height: '74%' }} />
-            <span style={{ height: '46%' }} />
-            <span style={{ height: '86%' }} />
-            <span style={{ height: '63%' }} />
+          <div className="preview-note preview-note-income">
+            <small>Receita registrada</small>
+            <strong>+ {formatCurrency(850)}</strong>
           </div>
-          <div className="preview-metrics">
-            <p><span>Receitas</span><b className="positive">{formatCurrency(18500)}</b></p>
-            <p><span>Despesas</span><b className="negative">{formatCurrency(6050)}</b></p>
+          <div className="preview-note preview-note-alert">
+            <small>Próxima conta</small>
+            <strong>Internet • 15/06</strong>
           </div>
         </div>
       </section>
 
+      <section className="landing-metrics" aria-label="Indicadores da plataforma">
+        <div><strong>4</strong><span>áreas essenciais</span></div>
+        <div><strong>100%</strong><span>dados por usuário</span></div>
+        <div><strong>CSV</strong><span>exportação Pro</span></div>
+      </section>
+
       <section className="landing-section" id="recursos">
-        <h2>Pronto para operar no dia a dia</h2>
+        <div className="section-heading">
+          <span className="eyebrow">Recursos</span>
+          <h2>Pronto para operar no dia a dia</h2>
+        </div>
         <div className="feature-grid">
-          <article><b>Dashboard executivo</b><p>KPIs, ultimas transacoes e comparativo de receitas e despesas.</p></article>
-          <article><b>Gestao completa</b><p>Cadastre receitas, despesas, contas, metas, categorias e agendamentos.</p></article>
-          <article><b>Segurança Firebase</b><p>Cada usuário acessa apenas os próprios dados no Firestore.</p></article>
-          <article><b>Exportacao e backup</b><p>CSV para planilhas e backup JSON para portabilidade.</p></article>
+          <article><span className="feature-icon">▥</span><b>Dashboard executivo</b><p>KPIs, últimas transações e comparativo de receitas e despesas.</p></article>
+          <article><span className="feature-icon">▣</span><b>Gestão completa</b><p>Cadastre receitas, despesas, contas, metas, categorias e agendamentos.</p></article>
+          <article><span className="feature-icon">◈</span><b>Segurança Firebase</b><p>Cada usuário acessa apenas os próprios dados no Firestore.</p></article>
+          <article><span className="feature-icon">⇩</span><b>Exportação e backup</b><p>CSV para planilhas e backup JSON para portabilidade.</p></article>
+        </div>
+      </section>
+
+      <section className="workflow-section">
+        <div className="section-heading">
+          <span className="eyebrow">Fluxo</span>
+          <h2>Menos tela parada, mais ação</h2>
+        </div>
+        <div className="workflow-steps">
+          <article><b>1</b><span>Lance entradas e saídas</span></article>
+          <article><b>2</b><span>Acompanhe contas e metas</span></article>
+          <article><b>3</b><span>Exporte ou faça backup</span></article>
         </div>
       </section>
 
@@ -476,7 +513,7 @@ function LandingPage({ onLogin, onRegister }) {
         <div>
           <span className="eyebrow">Oferta inicial</span>
           <h2>Plano Pro</h2>
-          <p>Ideal para vender como sistema financeiro simples para autônomos e pequenos negócios.</p>
+          <p>Ideal para vender como sistema financeiro simples para autônomos, prestadores de serviço e pequenos negócios.</p>
         </div>
         <div className="price-card">
           <span>A partir de</span>
@@ -558,6 +595,7 @@ function App() {
   const [settingsDraft, setSettingsDraft] = useState(data.settings);
   const [settingsSection, setSettingsSection] = useState('Perfil');
   const [newCategory, setNewCategory] = useState({ type: 'expenses', name: '' });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     return onAuthStateChanged(auth, currentUser => {
@@ -626,6 +664,7 @@ function App() {
   const monthIncomes = useMemo(() => data.incomes.filter(item => inPeriod(item.date, filters)), [data.incomes, filters]);
   const monthExpenses = useMemo(() => data.expenses.filter(item => inPeriod(item.date, filters)), [data.expenses, filters]);
   const monthBills = useMemo(() => data.bills.filter(item => inPeriod(item.due_date, filters)), [data.bills, filters]);
+  const pendingBills = useMemo(() => data.bills.filter(bill => bill.status !== 'Pago'), [data.bills]);
   const usage = useMemo(() => usageFromData(data), [data]);
   const isPro = isProSubscription(data.subscription);
 
@@ -916,9 +955,22 @@ function App() {
     const scheduled = applyDueSchedules(data);
     if (scheduled.changed) {
       persist(scheduled.data);
+      setNotice('Agendamentos vencidos aplicados com sucesso.');
     } else {
       setSaveStatus(user ? 'saved' : 'local');
+      setNotice('Nenhum agendamento vencido para aplicar hoje.');
     }
+  }
+
+  function showNotificationSummary() {
+    if (pendingBills.length === 0) {
+      setNotice('Sem notificações: todas as contas estão em dia.');
+      return;
+    }
+
+    setFilters(current => ({ ...current, status: 'Pendente' }));
+    setActivePage('contas');
+    setNotice(`${pendingBills.length} conta(s) pendente(s), total de ${formatCurrency(sumValues(pendingBills))}.`);
   }
 
   function saveSettings(event) {
@@ -1044,7 +1096,7 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><span /><span /><span /><span /></div>
@@ -1059,23 +1111,37 @@ function App() {
               onClick={() => setActivePage(item.id)}
             >
               <span className="menu-icon">{item.icon}</span>
-              {item.label}
+              <span className="menu-text">{item.label}</span>
             </button>
           ))}
         </nav>
-        <button className="logout" type="button" onClick={() => signOut(auth)}>⇱ Sair</button>
+        <button className="logout" type="button" onClick={() => signOut(auth)}>
+          <span className="logout-icon">⇱</span>
+          <span className="logout-text">Sair</span>
+        </button>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-title">
-            <button className="icon-button" type="button" aria-label="Menu">☰</button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}
+              aria-expanded={!sidebarCollapsed}
+              onClick={() => setSidebarCollapsed(current => !current)}
+            >
+              ☰
+            </button>
             <h1>{pageTitle}</h1>
           </div>
           <div className="topbar-actions">
             <span className={`save-status ${saveStatus}`}>{saveLabel}</span>
             <span className={`sync-dot ${apiOnline ? 'online' : ''}`} title={apiOnline ? 'Firebase conectado' : 'Usando dados locais'} />
-            <button className="icon-button" type="button" aria-label="Notificações">♧</button>
+            <button className="icon-button notification-button" type="button" aria-label="Notificações" onClick={showNotificationSummary}>
+              ♧
+              {pendingBills.length > 0 && <span className="notification-badge">{pendingBills.length}</span>}
+            </button>
             <div className="user-chip">
               <UserAvatar settings={data.settings} />
               <div>
@@ -1343,6 +1409,16 @@ function TablePage({ title, buttonLabel, onAdd, rows, search, setSearch, filters
     .filter(row => filters.category === 'Todas' || row.category === filters.category)
     .filter(row => normalizeText(`${row.description} ${row.category}`).includes(normalizeText(search)));
   const total = sumValues(visibleRows);
+  const pageSize = 8;
+  const [page, setPage] = useState(1);
+  const sortedRows = sortByDate(visibleRows);
+  const pageCount = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pagedRows = sortedRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, filters.month, filters.year, filters.category, rows.length]);
 
   return (
     <section className="page-card">
@@ -1353,12 +1429,23 @@ function TablePage({ title, buttonLabel, onAdd, rows, search, setSearch, filters
       <div className="search-line">
         <input value={search} onChange={event => setSearch(event.target.value)} placeholder={`Buscar ${title.toLowerCase()}...`} />
       </div>
-      <DataTable rows={sortByDate(visibleRows)} total={total} totalClass={totalClass} onEdit={onEdit} onDelete={onDelete} />
+      <DataTable
+        rows={pagedRows}
+        total={total}
+        totalClass={totalClass}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        page={currentPage}
+        pageCount={pageCount}
+        totalRows={visibleRows.length}
+        onPrev={() => setPage(current => Math.max(1, current - 1))}
+        onNext={() => setPage(current => Math.min(pageCount, current + 1))}
+      />
     </section>
   );
 }
 
-function DataTable({ rows, total, totalClass, onEdit, onDelete }) {
+function DataTable({ rows, total, totalClass, onEdit, onDelete, page, pageCount, totalRows, onPrev, onNext }) {
   return (
     <div className="table-wrap">
       <table>
@@ -1394,7 +1481,14 @@ function DataTable({ rows, total, totalClass, onEdit, onDelete }) {
           </tr>
         </tbody>
       </table>
-      <div className="pagination"><span>‹</span><b>1</b><span>›</span></div>
+      <div className="pagination">
+        <span>{totalRows} registro{totalRows === 1 ? '' : 's'}</span>
+        <div className="pagination-controls">
+          <button type="button" onClick={onPrev} disabled={page <= 1} aria-label="Página anterior">‹</button>
+          <b>{page}/{pageCount}</b>
+          <button type="button" onClick={onNext} disabled={page >= pageCount} aria-label="Próxima página">›</button>
+        </div>
+      </div>
     </div>
   );
 }
