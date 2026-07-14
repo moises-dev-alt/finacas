@@ -1,6 +1,6 @@
 # Backend Python
 
-API simples em Python com SQLite para o sistema de financas.
+API simples em Python com SQLite, mantida apenas como alternativa local para testes do sistema de financas. O frontend React atual usa Firebase diretamente, e as assinaturas sao processadas pelas Netlify Functions; esta API nao participa do fluxo publicado.
 
 ## Rodar localmente
 
@@ -29,10 +29,6 @@ O arquivo `backend/financas.db` e criado automaticamente na primeira execucao.
 - `DELETE /api/bills/:id`
 - `DELETE /api/goals/:id`
 
-## Deploy
+## Uso em outro ambiente
 
-Firebase Hosting hospeda o front React estatico. Para rodar Python em producao, publique este backend em um servico que execute Python, como Cloud Run, Render ou Railway, e configure no front:
-
-```bash
-VITE_API_URL=https://sua-api.com npm run build
-```
+Para adotar esta API em outro frontend ou ambiente, sera necessario criar explicitamente a integracao HTTP correspondente. O aplicativo atual nao le `VITE_API_URL`. Consulte o README principal para o fluxo de producao com Firebase, Netlify Functions e Stripe.

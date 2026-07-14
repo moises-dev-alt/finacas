@@ -41,14 +41,14 @@ const plans = {
   },
   pro: {
     name: 'Pro',
-    price: 'R$ 29/mês',
-    description: 'Para usar todos os recursos e vender como solução completa.',
+    price: 'R$ 11,99/mês',
+    description: '7 dias grátis para novas contas; depois, assine para continuar no Pro.',
     limits: {
       transactions: Infinity,
       bills: Infinity,
       goals: Infinity,
     },
-    features: ['Transações ilimitadas', 'Relatórios completos', 'Metas ilimitadas', 'Agendamentos', 'Backup e exportação'],
+    features: ['7 dias grátis para novas contas', 'Transações ilimitadas', 'Relatórios completos', 'Metas ilimitadas', 'Agendamentos', 'Backup e exportação'],
   },
 };
 
@@ -186,10 +186,6 @@ function normalizeSubscription(value) {
   };
 }
 
-function planLabel(subscription) {
-  return isProSubscription(subscription) ? 'Pro' : 'Free';
-}
-
 function subscriptionFromBillingPayload(payload) {
   const candidate = payload?.subscription || payload?.data?.subscription || payload?.data || payload;
   if (!candidate || typeof candidate !== 'object') return null;
@@ -214,6 +210,19 @@ function formatSubscriptionDate(value) {
       : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+function formatSubscriptionDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
 }
 
 function financeWritePayload(value) {
@@ -338,11 +347,32 @@ function asCsvCell(value) {
   return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
 
-function loadLocalData() {
+function localDataKey(userId = '') {
+  return `financeData:${userId || 'guest'}`;
+}
+
+function loadLocalData(userId = '') {
   try {
-    return JSON.parse(localStorage.getItem('financeData')) || seedData;
+    const cached = JSON.parse(localStorage.getItem(localDataKey(userId)));
+    if (cached) return cached;
+    return userId ? null : seedData;
   } catch {
-    return seedData;
+    return userId ? null : seedData;
+  }
+}
+
+function localFinanceData(userId = '') {
+  const cached = loadLocalData(userId);
+  return cached ? financeWritePayload(cached) : cached;
+}
+
+function saveLocalFinanceData(userId, value) {
+  try {
+    localStorage.setItem(localDataKey(userId), JSON.stringify(financeWritePayload(value)));
+    return true;
+  } catch (error) {
+    console.error('Falha ao salvar o cache local:', error?.message || error);
+    return false;
   }
 }
 
@@ -396,9 +426,57 @@ function usageFromData(data) {
   };
 }
 
-function isProSubscription(subscription) {
+function trialProvider(subscription) {
+  return String(subscription?.provider || '').trim().toLowerCase() === 'trial';
+}
+
+function monotonicNow() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : 0;
+}
+
+function createTrialVerification(subscription, serverNow, responseElapsedMs = 0) {
+  if (!trialProvider(subscription)) return null;
+  const currentPeriodEnd = String(subscription?.currentPeriodEnd || '');
+  const trialEndsAt = Date.parse(currentPeriodEnd);
+  const verifiedServerNow = Date.parse(serverNow || '');
+  if (!Number.isFinite(trialEndsAt) || !Number.isFinite(verifiedServerNow)) return null;
+  const remainingMs = trialEndsAt - verifiedServerNow - Math.max(Number(responseElapsedMs) || 0, 0);
+  if (remainingMs <= 0) return null;
+  return {
+    currentPeriodEnd,
+    remainingMs,
+    verifiedAtWallClock: Date.now(),
+    verifiedAtMonotonic: monotonicNow(),
+  };
+}
+
+function trialVerificationRemaining(subscription, verification) {
+  if (
+    !trialProvider(subscription)
+    || !verification
+    || verification.currentPeriodEnd !== String(subscription?.currentPeriodEnd || '')
+  ) {
+    return 0;
+  }
+
+  const monotonicElapsed = monotonicNow() - Number(verification.verifiedAtMonotonic || 0);
+  const wallClockElapsed = Date.now() - Number(verification.verifiedAtWallClock || 0);
+  const elapsed = Number(verification.verifiedAtMonotonic) > 0
+    ? Math.max(0, monotonicElapsed)
+    : Math.max(0, wallClockElapsed);
+  return Number(verification.remainingMs || 0) - elapsed;
+}
+
+function isProSubscription(subscription, trialVerified = false) {
+  if (trialProvider(subscription) && !trialVerified) return false;
   if (typeof subscription?.entitled === 'boolean') return subscription.entitled;
   return subscription?.plan === 'pro' && subscription?.status === 'active';
+}
+
+function isTrialProSubscription(subscription, isPro) {
+  return trialProvider(subscription) && isPro;
 }
 
 function isLegacyProSubscription(subscription) {
@@ -1006,7 +1084,7 @@ function AuthPage({ mode, setMode, error, onSubmit, onBack, onPasswordReset, sub
 
 function App() {
   const [activePage, setActivePage] = useState('dashboard');
-  const [data, setData] = useState(loadLocalData);
+  const [data, setData] = useState(() => normalizeRemoteData(localFinanceData(), null));
   const [apiOnline, setApiOnline] = useState(false);
   const [saveStatus, setSaveStatus] = useState('local');
   const [user, setUser] = useState(null);
@@ -1020,6 +1098,7 @@ function App() {
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingError, setBillingError] = useState('');
   const [billingAction, setBillingAction] = useState('');
+  const [trialVerification, setTrialVerification] = useState(null);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState(() => {
     const current = todayParts();
@@ -1040,18 +1119,54 @@ function App() {
   const pendingRegistrationProfileRef = useRef(null);
   const latestDataRef = useRef(data);
   const billingRequestRef = useRef(0);
+  const billingVersionFloorRef = useRef(null);
   const calendarDateRef = useRef(todayParts());
   const [mobileViewport, setMobileViewport] = useState(() => (
     typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches
   ));
 
-  const applySubscriptionUpdate = useCallback(value => {
+  const applySubscriptionUpdate = useCallback((value, {
+    authoritative = false,
+    responseElapsedMs = 0,
+    serverNow = null,
+  } = {}) => {
     const subscription = normalizeSubscription(value);
+    const incomingVersion = Date.parse(subscription.syncedAt || '');
+    const serverVersion = Date.parse(serverNow || '');
+    const currentFloor = billingVersionFloorRef.current;
+    const acceptedVersion = Math.max(
+      Number.isFinite(incomingVersion) ? incomingVersion : Number.NEGATIVE_INFINITY,
+      Number.isFinite(serverVersion) ? serverVersion : Number.NEGATIVE_INFINITY,
+    );
+
+    if (!authoritative) {
+      if (!Number.isFinite(currentFloor) || !Number.isFinite(incomingVersion)) return false;
+      if (incomingVersion <= currentFloor) return false;
+    } else if (
+      Number.isFinite(currentFloor)
+      && Number.isFinite(acceptedVersion)
+      && acceptedVersion < currentFloor
+    ) {
+      return false;
+    }
+
+    if (Number.isFinite(acceptedVersion)) billingVersionFloorRef.current = acceptedVersion;
+
+    setTrialVerification(current => {
+      if (!trialProvider(subscription)) return null;
+      if (serverNow) {
+        return createTrialVerification(subscription, serverNow, responseElapsedMs);
+      }
+      return trialVerificationRemaining(subscription, current) > 0 ? current : null;
+    });
+
+    latestDataRef.current = { ...latestDataRef.current, subscription };
     setData(current => {
       const nextData = { ...current, subscription };
       latestDataRef.current = nextData;
       return nextData;
     });
+    return true;
   }, []);
 
   const refreshBillingStatus = useCallback(async ({ silent = false } = {}) => {
@@ -1067,11 +1182,17 @@ function App() {
     if (!silent) setBillingLoading(true);
 
     try {
+      const requestStartedAt = monotonicNow();
       const payload = await getBillingStatus(user);
+      const responseElapsedMs = monotonicNow() - requestStartedAt;
       if (requestId !== billingRequestRef.current) return null;
       const subscription = subscriptionFromBillingPayload(payload);
       if (!subscription) throw new Error('O serviço retornou um status de assinatura inválido.');
-      applySubscriptionUpdate(subscription);
+      applySubscriptionUpdate(subscription, {
+        authoritative: true,
+        responseElapsedMs,
+        serverNow: payload?.serverNow || payload?.data?.serverNow || null,
+      });
       setBillingError('');
       return subscription;
     } catch (error) {
@@ -1146,6 +1267,15 @@ function App() {
   useEffect(() => {
     return onAuthStateChanged(auth, currentUser => {
       if (!currentUser) pendingRegistrationProfileRef.current = null;
+      const cachedData = normalizeRemoteData(
+        localFinanceData(currentUser?.uid),
+        currentUser,
+      );
+      billingVersionFloorRef.current = null;
+      setTrialVerification(null);
+      latestDataRef.current = cachedData;
+      setData(cachedData);
+      setSettingsDraft(cachedData.settings);
       setUser(currentUser);
       setAuthLoading(false);
     });
@@ -1170,6 +1300,7 @@ function App() {
       try {
         const snapshot = await getDoc(userFinanceRef(user.uid));
         const storedData = snapshot.data();
+        const needsFinanceInitialization = !snapshot.exists() || !storedData?.createdAt;
         const storedName = cleanUserName(storedData?.settings?.name);
         const authenticatedName = cleanUserName(financeUser.displayName);
         const shouldRepairDefaultName = snapshot.exists()
@@ -1188,12 +1319,12 @@ function App() {
         const scheduled = applyDueSchedules(remoteData);
         loadedData = scheduled.data;
 
-        if (!snapshot.exists()) {
+        if (needsFinanceInitialization) {
           await setDoc(userFinanceRef(user.uid), {
             ...financeWritePayload(scheduled.data),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          });
+          }, { merge: true });
         } else if (scheduled.changed || shouldRepairDefaultName) {
           await setDoc(userFinanceRef(user.uid), {
             ...financeWritePayload(scheduled.data),
@@ -1203,16 +1334,27 @@ function App() {
 
         shouldSyncProfile = true;
         if (cancelled) return;
-        setData(scheduled.data);
+        setData(current => {
+          const nextData = { ...scheduled.data, subscription: current.subscription };
+          latestDataRef.current = nextData;
+          return nextData;
+        });
         setSettingsDraft(scheduled.data.settings);
         setApiOnline(true);
         setSaveStatus('saved');
       } catch {
         if (cancelled) return;
-        const localData = normalizeRemoteData(loadLocalData(), financeUser);
+        const localData = normalizeRemoteData(
+          localFinanceData(user.uid),
+          financeUser,
+        );
         const scheduled = applyDueSchedules(localData);
         loadedData = scheduled.data;
-        setData(scheduled.data);
+        setData(current => {
+          const nextData = { ...scheduled.data, subscription: current.subscription };
+          latestDataRef.current = nextData;
+          return nextData;
+        });
         setSettingsDraft(scheduled.data.settings);
         setApiOnline(false);
         setSaveStatus('offline');
@@ -1265,6 +1407,70 @@ function App() {
   }, [refreshBillingStatus, user]);
 
   useEffect(() => {
+    if (!user || !trialProvider(data.subscription) || !trialVerification) {
+      return undefined;
+    }
+
+    let timer;
+
+    function expireTrialLocally() {
+      const remainingMs = trialVerificationRemaining(data.subscription, trialVerification);
+      if (remainingMs > 0) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(expireTrialLocally, remainingMs + 250);
+        return;
+      }
+
+      setTrialVerification(null);
+      setData(current => {
+        const subscription = current.subscription || {};
+        if (
+          !trialProvider(subscription)
+          || String(subscription.currentPeriodEnd || '') !== trialVerification.currentPeriodEnd
+          || subscription.entitled === false
+        ) {
+          return current;
+        }
+
+        const nextData = {
+          ...current,
+          subscription: {
+            ...subscription,
+            plan: 'free',
+            status: 'expired',
+            entitled: false,
+            canManage: false,
+          },
+        };
+        latestDataRef.current = nextData;
+        return nextData;
+      });
+
+      refreshBillingStatus({ silent: true });
+    }
+
+    timer = window.setTimeout(
+      expireTrialLocally,
+      Math.max(trialVerificationRemaining(data.subscription, trialVerification) + 250, 0),
+    );
+    const handleFocus = () => {
+      expireTrialLocally();
+      refreshBillingStatus({ silent: true });
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') handleFocus();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [data.subscription, refreshBillingStatus, trialVerification, user]);
+
+  useEffect(() => {
     if (!user) return;
     const params = new URLSearchParams(window.location.search);
     const billingResult = params.get('billing');
@@ -1308,9 +1514,9 @@ function App() {
   }, [notice]);
 
   useEffect(() => {
-    localStorage.setItem('financeData', JSON.stringify(data));
+    saveLocalFinanceData(user?.uid, data);
     document.body.dataset.theme = data.settings.theme;
-  }, [data]);
+  }, [data, user?.uid]);
 
   useEffect(() => {
     latestDataRef.current = data;
@@ -1354,7 +1560,8 @@ function App() {
   const monthBills = useMemo(() => data.bills.filter(item => inPeriod(item.due_date, filters)), [data.bills, filters]);
   const pendingBills = useMemo(() => data.bills.filter(bill => bill.status !== 'Pago'), [data.bills]);
   const usage = useMemo(() => usageFromData(data), [data]);
-  const isPro = isProSubscription(data.subscription);
+  const trialVerified = trialVerificationRemaining(data.subscription, trialVerification) > 0;
+  const isPro = isProSubscription(data.subscription, trialVerified);
 
   const totals = useMemo(() => {
     const income = sumValues(monthIncomes);
@@ -1465,6 +1672,14 @@ function App() {
     }
   }
 
+  async function handleSignOut() {
+    try {
+      await signOut(auth);
+    } catch {
+      setNotice('Não foi possível sair agora. Tente novamente.');
+    }
+  }
+
   async function persist(nextData) {
     const stateData = {
       ...nextData,
@@ -1472,8 +1687,8 @@ function App() {
     };
     latestDataRef.current = stateData;
     setData(stateData);
-    localStorage.setItem('financeData', JSON.stringify(stateData));
-    setSaveStatus(user ? 'saving' : 'local');
+    const localSaved = saveLocalFinanceData(user?.uid, stateData);
+    setSaveStatus(user ? 'saving' : localSaved ? 'local' : 'offline');
     if (!user) return true;
     try {
       await setDoc(userFinanceRef(user.uid), {
@@ -1611,7 +1826,7 @@ function App() {
     try {
       const payload = await cancelBillingSubscription(user, {});
       const subscription = subscriptionFromBillingPayload(payload);
-      if (subscription) applySubscriptionUpdate(subscription);
+      if (subscription) applySubscriptionUpdate(subscription, { authoritative: true });
       setModal(null);
       const periodEnd = formatSubscriptionDate(subscription?.currentPeriodEnd || data.subscription?.currentPeriodEnd);
       setNotice(periodEnd
@@ -1639,7 +1854,7 @@ function App() {
     try {
       const payload = await resumeBillingSubscription(user, {});
       const subscription = subscriptionFromBillingPayload(payload);
-      if (subscription) applySubscriptionUpdate(subscription);
+      if (subscription) applySubscriptionUpdate(subscription, { authoritative: true });
       setNotice('Cancelamento removido. Sua assinatura Pro continuará ativa.');
       refreshBillingStatus({ silent: true });
     } catch (error) {
@@ -2029,7 +2244,7 @@ function App() {
             </button>
           ))}
         </nav>
-        <button className="logout" type="button" aria-label="Sair da conta" onClick={() => signOut(auth)}>
+        <button className="logout" type="button" aria-label="Sair da conta" onClick={handleSignOut}>
           <span className="logout-icon" aria-hidden="true">🚪</span>
           <span className="logout-text">Sair</span>
         </button>
@@ -2081,7 +2296,7 @@ function App() {
               <UserAvatar settings={data.settings} />
               <div>
                 <strong>{data.settings.name}</strong>
-                <small>{planLabel(data.subscription)}</small>
+                <small>{isPro ? 'Pro' : 'Free'}</small>
               </div>
             </div>
           </div>
@@ -2532,10 +2747,13 @@ function Billing({
   onRefreshSubscription,
 }) {
   const [section, setSection] = useState('plans');
-  const currentPlan = planLabel(subscription);
+  const currentPlan = isPro ? 'Pro' : 'Free';
+  const isTrialPro = isTrialProSubscription(subscription, isPro);
   const isLegacyPro = isLegacyProSubscription(subscription);
   const cancellationScheduled = Boolean(subscription?.cancelAtPeriodEnd);
-  const currentPeriodEnd = formatSubscriptionDate(subscription?.currentPeriodEnd);
+  const currentPeriodEnd = isTrialPro
+    ? formatSubscriptionDateTime(subscription?.currentPeriodEnd)
+    : formatSubscriptionDate(subscription?.currentPeriodEnd);
   const canManage = subscription?.canManage
     ?? subscription?.provider === 'stripe';
   const actionBusy = Boolean(billingAction);
@@ -2549,7 +2767,9 @@ function Billing({
         : 'free';
   const statusLabel = billingLoading
     ? 'Verificando...'
-    : isLegacyPro
+    : isTrialPro
+      ? 'Teste Pro gratuito'
+      : isLegacyPro
       ? 'Pro legado ativo'
       : cancellationScheduled
       ? 'Cancelamento agendado'
@@ -2612,24 +2832,26 @@ function Billing({
 
           <div className="payment-panel">
             <div>
-              <h2>{isLegacyPro ? 'Seu Pro legado está mantido' : isPro ? 'Sua assinatura Pro' : 'Pagamento do plano Pro'}</h2>
+              <h2>{isTrialPro ? 'Seu teste Pro gratuito' : isLegacyPro ? 'Seu Pro legado está mantido' : isPro ? 'Sua assinatura Pro' : 'Pagamento do plano Pro'}</h2>
               <p>
-                {isLegacyPro
+                {isTrialPro
+                  ? `Todos os recursos estão liberados gratuitamente${currentPeriodEnd ? ` até ${currentPeriodEnd}` : ' por 7 dias'}. Nenhuma cobrança será feita automaticamente.`
+                  : isLegacyPro
                   ? 'Você continua com todos os recursos Pro. Este acesso foi mantido sem uma cobrança recorrente do Stripe.'
                   : isPro
                   ? cancellationScheduled
                     ? `Seu acesso continua ativo${currentPeriodEnd ? ` até ${currentPeriodEnd}` : ' até o fim do período pago'}.`
                     : 'Seu plano está ativo. Pagamentos, notas e método de cobrança podem ser gerenciados no portal seguro.'
                   : billingReady
-                    ? 'O pagamento é processado com segurança. A liberação do Pro acontece automaticamente após a confirmação.'
-                    : 'O serviço de pagamento está temporariamente indisponível.'}
+                     ? 'O pagamento é processado com segurança. A liberação do Pro acontece automaticamente após a confirmação.'
+                     : 'O serviço de pagamento está temporariamente indisponível.'}
               </p>
-              {!isPro && pixKey && <p className="pix-box"><span>Chave Pix</span><b>{pixKey}</b></p>}
+              {(!isPro || isTrialPro) && pixKey && <p className="pix-box"><span>Chave Pix</span><b>{pixKey}</b></p>}
             </div>
             <div className="payment-actions">
-              {!isPro && (
+              {(!isPro || isTrialPro) && (
                 <button className="primary-button" type="button" onClick={onCheckout} disabled={!billingReady || billingLoading || actionBusy}>
-                  {billingAction === 'checkout' ? 'Abrindo checkout...' : 'Assinar plano Pro'}
+                  {billingAction === 'checkout' ? 'Abrindo checkout...' : `Assinar por ${plans.pro.price}`}
                 </button>
               )}
               {canManage && !isLegacyPro && (
@@ -2651,7 +2873,9 @@ function Billing({
             <span className="eyebrow">Gerenciar assinatura</span>
             <h2 id="cancellation-title">Cancelamento do plano Pro</h2>
             <p>
-              {isLegacyPro
+              {isTrialPro
+                ? `O teste gratuito${currentPeriodEnd ? ` termina em ${currentPeriodEnd}` : ' dura 7 dias'} e não gera cobrança automática.`
+                : isLegacyPro
                 ? 'Seu acesso Pro anterior permanece ativo e não depende de uma assinatura recorrente.'
                 : 'Agende o encerramento da renovação ou reative o plano antes do fim do período já pago.'}
             </p>
@@ -2661,6 +2885,18 @@ function Billing({
             <div className="cancellation-empty billing-loading-state" role="status">
               <strong>Verificando sua assinatura</strong>
               <p>Aguarde enquanto consultamos o status mais recente.</p>
+            </div>
+          ) : isTrialPro ? (
+            <div className="cancellation-empty" role="status">
+              <strong>Teste Pro gratuito ativo</strong>
+              <p>
+                {currentPeriodEnd
+                  ? `Você pode usar todos os recursos até ${currentPeriodEnd}. Depois, a conta volta ao Free se nenhuma assinatura for contratada.`
+                  : 'Você pode usar todos os recursos por 7 dias. Depois, a conta volta ao Free se nenhuma assinatura for contratada.'}
+              </p>
+              <button className="primary-button" type="button" onClick={onCheckout} disabled={!billingReady || actionBusy}>
+                {billingAction === 'checkout' ? 'Abrindo checkout...' : `Assinar por ${plans.pro.price}`}
+              </button>
             </div>
           ) : isLegacyPro || (isPro && !canManage) ? (
             <div className="cancellation-empty" role="status">

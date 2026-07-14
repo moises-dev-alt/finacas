@@ -7,8 +7,15 @@ import {
   publicSubscription,
   stripeSubscriptionIds,
 } from './subscription.js';
+import {
+  createProTrialGrant,
+  expiredProTrialGrant,
+  proTrialPublicSubscription,
+  shouldExpireProTrial,
+} from './trial.js';
 
 const WEBHOOK_LEASE_MS = 2 * 60 * 1000;
+const CHECKOUT_ATTEMPT_LOCK_MS = 10 * 60 * 1000;
 
 function safeDocumentId(value, label) {
   const id = String(value || '');
@@ -24,6 +31,14 @@ function financeRef(uid) {
 
 function privateRef(uid) {
   return firestoreDb().doc(`billingPrivate/${safeDocumentId(uid, 'Usuario')}`);
+}
+
+function trialRef(uid) {
+  return firestoreDb().doc(`trialGrants/${safeDocumentId(uid, 'Usuario')}`);
+}
+
+function checkoutAttemptRef(uid) {
+  return firestoreDb().doc(`checkoutAttempts/${safeDocumentId(uid, 'Usuario')}`);
 }
 
 function customerRef(customerId) {
@@ -97,12 +112,23 @@ export function subscriptionNeedsCanonicalReset(subscription) {
   ].some(field => Boolean(subscription[field]));
 }
 
-export function unlinkedPublicSubscriptionResolution(current, { now = new Date() } = {}) {
+export function unlinkedPublicSubscriptionResolution(current, {
+  now = new Date(),
+  trialGrant = null,
+} = {}) {
   const legacyState = legacyPublicSubscription(current, { now });
   if (legacyState) {
     return {
       subscription: legacyState,
       needsWrite: !isCanonicalPublicSubscription(current, legacyState),
+    };
+  }
+
+  const trialState = proTrialPublicSubscription(trialGrant, { now });
+  if (trialState) {
+    return {
+      subscription: trialState,
+      needsWrite: !isCanonicalPublicSubscription(current, trialState),
     };
   }
 
@@ -170,13 +196,18 @@ export async function resetPublicSubscription(uid, expectedPrivateBilling) {
  * na mesma transacao; se o webhook criar o vinculo Stripe no meio, o Firestore
  * repete a transacao e este helper sinaliza o vinculo em vez de sobrescreve-lo.
  */
-export async function resolveUnlinkedPublicSubscription(uid) {
+export async function resolveUnlinkedPublicSubscription(uid, {
+  authCreatedAt = null,
+  trialEligibleSince = null,
+  now = new Date(),
+} = {}) {
   const privateReference = privateRef(uid);
   const publicReference = financeRef(uid);
+  const trialReference = trialRef(uid);
+  const synchronizedAt = now instanceof Date ? now : new Date(now);
 
   return firestoreDb().runTransaction(async transaction => {
     const privateSnapshot = await transaction.get(privateReference);
-    const publicSnapshot = await transaction.get(publicReference);
 
     if (privateSnapshot.exists) {
       return {
@@ -186,8 +217,28 @@ export async function resolveUnlinkedPublicSubscription(uid) {
       };
     }
 
+    const publicSnapshot = await transaction.get(publicReference);
+    const trialSnapshot = await transaction.get(trialReference);
+
+    let trialGrant = trialSnapshot.exists ? trialSnapshot.data() : null;
+    if (!trialSnapshot.exists && authCreatedAt && trialEligibleSince) {
+      trialGrant = createProTrialGrant(authCreatedAt, {
+        eligibleSince: trialEligibleSince,
+        now: synchronizedAt,
+      });
+      if (trialGrant) transaction.set(trialReference, trialGrant);
+    }
+
+    if (shouldExpireProTrial(trialGrant, { now: synchronizedAt })) {
+      trialGrant = expiredProTrialGrant(trialGrant, { now: synchronizedAt });
+      transaction.set(trialReference, { expiredAt: trialGrant.expiredAt }, { merge: true });
+    }
+
     const current = publicSnapshot.data()?.subscription;
-    const resolution = unlinkedPublicSubscriptionResolution(current);
+    const resolution = unlinkedPublicSubscriptionResolution(current, {
+      now: synchronizedAt,
+      trialGrant,
+    });
     if (resolution.needsWrite) {
       writePublicSubscription(transaction, publicReference, resolution.subscription);
     }
@@ -202,6 +253,34 @@ export async function resolveUnlinkedPublicSubscription(uid) {
 export async function readPrivateBilling(uid) {
   const snapshot = await privateRef(uid).get();
   return snapshot.exists ? snapshot.data() : null;
+}
+
+export async function claimCheckoutAttempt(uid, attemptId, { now = new Date() } = {}) {
+  const reference = checkoutAttemptRef(uid);
+  const nowTime = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(nowTime)) {
+    throw new HttpError(500, 'checkout_clock_invalid', 'Nao foi possivel iniciar o checkout agora.');
+  }
+
+  return firestoreDb().runTransaction(async transaction => {
+    const snapshot = await transaction.get(reference);
+    const currentExpiresAt = snapshot.data()?.expiresAt;
+    const currentExpiresAtMs = typeof currentExpiresAt?.toMillis === 'function'
+      ? currentExpiresAt.toMillis()
+      : new Date(currentExpiresAt || 0).getTime();
+
+    if (Number.isFinite(currentExpiresAtMs) && currentExpiresAtMs > nowTime) {
+      return { claimed: false, retryAt: new Date(currentExpiresAtMs).toISOString() };
+    }
+
+    const expiresAtMs = nowTime + CHECKOUT_ATTEMPT_LOCK_MS;
+    transaction.set(reference, {
+      attemptId: String(attemptId || ''),
+      createdAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(expiresAtMs),
+    });
+    return { claimed: true, retryAt: new Date(expiresAtMs).toISOString() };
+  });
 }
 
 function subscriptionSyncPayload(subscription, options = {}) {
