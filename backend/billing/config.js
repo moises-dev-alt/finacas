@@ -1,4 +1,6 @@
 const DEFAULT_APP_URL = 'https://financas-ed7aa.web.app';
+const DEFAULT_PRO_TRIAL_ELIGIBLE_SINCE = '2026-07-14T21:08:19.000Z';
+const ISO_TIMESTAMP_WITH_TIMEZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const DEFAULT_FRONTEND_ORIGINS = [
   'https://financas-ed7aa.web.app',
@@ -94,6 +96,18 @@ export function appUrl() {
   return safeAppUrl();
 }
 
+export function proTrialEligibleSince() {
+  const candidate = clean(process.env.PRO_TRIAL_ELIGIBLE_SINCE)
+    || DEFAULT_PRO_TRIAL_ELIGIBLE_SINCE;
+  const date = new Date(candidate);
+  if (!ISO_TIMESTAMP_WITH_TIMEZONE.test(candidate) || !Number.isFinite(date.getTime())) {
+    const error = new Error('PRO_TRIAL_ELIGIBLE_SINCE precisa ser uma data ISO valida.');
+    error.code = 'configuration_invalid';
+    throw error;
+  }
+  return date.toISOString();
+}
+
 export function allowedOrigins() {
   const configured = clean(process.env.FRONTEND_ORIGINS)
     .split(',')
@@ -122,5 +136,6 @@ export function configurationHealth() {
     webhook: Boolean(clean(process.env.STRIPE_WEBHOOK_SECRET)),
     paymentLink: Boolean(clean(process.env.STRIPE_PAYMENT_LINK_URL)
       || (isLocalRuntime() && clean(process.env.VITE_PRO_CHECKOUT_URL))),
+    trial: Boolean(proTrialEligibleSince()),
   };
 }

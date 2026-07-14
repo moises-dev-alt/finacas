@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { firebaseCredentials } from '../billing/config.js';
+import {
+  configurationHealth,
+  firebaseCredentials,
+  proTrialEligibleSince,
+} from '../billing/config.js';
 import { checkoutPaymentLink } from '../billing/payment-link.js';
 import {
   defaultPublicSubscription,
@@ -16,6 +20,13 @@ import {
   subscriptionNeedsCanonicalReset,
   unlinkedPublicSubscriptionResolution,
 } from '../billing/store.js';
+import {
+  createProTrialGrant,
+  expiredProTrialGrant,
+  normalizeProTrialGrant,
+  proTrialPublicSubscription,
+  shouldExpireProTrial,
+} from '../billing/trial.js';
 import { eventTargetsCurrentSubscription } from '../billing/webhook.js';
 
 function withPaymentLink(value, action) {
@@ -43,6 +54,18 @@ function withFirebaseCredentialEnvironment(values, action) {
   }
 }
 
+function withProTrialCutoff(value, action) {
+  const previous = process.env.PRO_TRIAL_ELIGIBLE_SINCE;
+  if (value === undefined) delete process.env.PRO_TRIAL_ELIGIBLE_SINCE;
+  else process.env.PRO_TRIAL_ELIGIBLE_SINCE = value;
+  try {
+    return action();
+  } finally {
+    if (previous === undefined) delete process.env.PRO_TRIAL_ELIGIBLE_SINCE;
+    else process.env.PRO_TRIAL_ELIGIBLE_SINCE = previous;
+  }
+}
+
 test('credencial Firebase remove a formatacao copiada do JSON sem alterar o PEM', () => {
   withFirebaseCredentialEnvironment({
     FIREBASE_PROJECT_ID: 'financas-ed7aa',
@@ -54,6 +77,19 @@ test('credencial Firebase remove a formatacao copiada do JSON sem alterar o PEM'
       clientEmail: 'firebase-adminsdk-test@financas-ed7aa.iam.gserviceaccount.com',
       privateKey: '-----BEGIN PRIVATE KEY-----\nLINHA1\nLINHA2\n-----END PRIVATE KEY-----',
     });
+  });
+});
+
+test('corte do trial exige timestamp ISO com fuso e aparece na saude', () => {
+  withProTrialCutoff('2026-07-14T18:08:19-03:00', () => {
+    assert.equal(proTrialEligibleSince(), '2026-07-14T21:08:19.000Z');
+    assert.equal(configurationHealth().trial, true);
+  });
+
+  withProTrialCutoff('07/14/2026 18:08:19', () => {
+    assert.throws(() => proTrialEligibleSince(), error => (
+      error?.code === 'configuration_invalid'
+    ));
   });
 });
 
@@ -133,8 +169,8 @@ test('fim do período usa o menor current_period_end dos itens', () => {
   assert.equal(subscriptionPeriodEnd(subscription), new Date(1_800_000_000 * 1000).toISOString());
 });
 
-test('active e past_due mantêm o direito ao plano Pro', () => {
-  for (const status of ['active', 'past_due']) {
+test('active, trialing e past_due mantêm o direito ao plano Pro', () => {
+  for (const status of ['active', 'trialing', 'past_due']) {
     const result = publicSubscription(stripeSubscription({ status }));
     assert.equal(result.plan, 'pro');
     assert.equal(result.status, 'active');
@@ -169,6 +205,104 @@ test('estado padrão nunca concede acesso pago', () => {
     canceledAt: null,
     syncedAt: null,
   });
+});
+
+test('trial Pro começa na criação da conta e termina exatamente após 7 dias', () => {
+  const createdAt = '2026-07-14T21:30:00.000Z';
+  const eligibleSince = '2026-07-14T21:08:19.000Z';
+  const now = '2026-07-14T21:31:00.000Z';
+  const grant = createProTrialGrant(createdAt, { eligibleSince, now });
+
+  assert.deepEqual(grant, {
+    schemaVersion: 1,
+    durationDays: 7,
+    eligible: true,
+    authCreatedAt: createdAt,
+    eligibleSince,
+    startsAt: createdAt,
+    endsAt: '2026-07-21T21:30:00.000Z',
+    decidedAt: now,
+    expiredAt: null,
+  });
+  assert.deepEqual(createProTrialGrant(createdAt, { eligibleSince, now }), grant);
+});
+
+test('conta anterior ao lançamento ou com criação futura não recebe trial', () => {
+  const eligibleSince = '2026-07-14T21:08:19.000Z';
+  const now = '2026-07-14T21:30:00.000Z';
+  const beforeLaunch = createProTrialGrant('2026-07-14T21:08:18.999Z', {
+    eligibleSince,
+    now,
+  });
+  const futureAccount = createProTrialGrant('2026-07-14T22:00:00.000Z', {
+    eligibleSince,
+    now,
+  });
+
+  assert.equal(beforeLaunch.eligible, false);
+  assert.equal(futureAccount.eligible, false);
+  assert.equal(proTrialPublicSubscription(beforeLaunch, { now }), null);
+  assert.equal(proTrialPublicSubscription(futureAccount, { now }), null);
+});
+
+test('trial expira no limite exato e nunca reabre após marcar a expiração', () => {
+  const grant = createProTrialGrant('2026-07-14T21:30:00.000Z', {
+    eligibleSince: '2026-07-14T21:08:19.000Z',
+    now: '2026-07-14T21:31:00.000Z',
+  });
+
+  assert.equal(
+    proTrialPublicSubscription(grant, { now: '2026-07-21T21:29:59.999Z' })?.provider,
+    'trial',
+  );
+  assert.equal(proTrialPublicSubscription(grant, { now: grant.endsAt }), null);
+  assert.equal(shouldExpireProTrial(grant, { now: grant.endsAt }), true);
+
+  const expired = expiredProTrialGrant(grant, { now: grant.endsAt });
+  assert.equal(expired.expiredAt, grant.endsAt);
+  assert.equal(
+    proTrialPublicSubscription(expired, { now: '2026-07-20T12:00:00.000Z' }),
+    null,
+  );
+});
+
+test('marcador de trial adulterado falha fechado', () => {
+  const grant = createProTrialGrant('2026-07-14T21:30:00.000Z', {
+    eligibleSince: '2026-07-14T21:08:19.000Z',
+    now: '2026-07-14T21:31:00.000Z',
+  });
+  const corrupted = { ...grant, endsAt: '2026-08-21T21:30:00.000Z' };
+
+  assert.equal(normalizeProTrialGrant(corrupted), null);
+  assert.equal(proTrialPublicSubscription(corrupted, { now: grant.decidedAt }), null);
+});
+
+test('resolução sem Stripe preserva trial canônico e o remove após expirar', () => {
+  const grant = createProTrialGrant('2026-07-14T21:30:00.000Z', {
+    eligibleSince: '2026-07-14T21:08:19.000Z',
+    now: '2026-07-14T21:31:00.000Z',
+  });
+  const active = unlinkedPublicSubscriptionResolution(undefined, {
+    now: '2026-07-15T12:00:00.000Z',
+    trialGrant: grant,
+  });
+
+  assert.equal(active.subscription.plan, 'pro');
+  assert.equal(active.subscription.provider, 'trial');
+  assert.equal(active.subscription.entitled, true);
+  assert.equal(active.needsWrite, true);
+  assert.equal(unlinkedPublicSubscriptionResolution(active.subscription, {
+    now: '2026-07-16T12:00:00.000Z',
+    trialGrant: grant,
+  }).needsWrite, false);
+
+  const expired = unlinkedPublicSubscriptionResolution(active.subscription, {
+    now: grant.endsAt,
+    trialGrant: expiredProTrialGrant(grant, { now: grant.endsAt }),
+  });
+  assert.equal(expired.subscription.plan, 'free');
+  assert.equal(expired.subscription.entitled, false);
+  assert.equal(expired.needsWrite, true);
 });
 
 test('somente estados realmente encerrados permitem substituir o vínculo', () => {

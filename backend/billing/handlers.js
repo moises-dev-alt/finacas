@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto';
+
 import { canonicalUser, requireAdmin, requireUser } from './auth.js';
-import { appUrl, configurationHealth } from './config.js';
+import { appUrl, configurationHealth, proTrialEligibleSince } from './config.js';
 import { HttpError } from './errors.js';
 import { json } from './http.js';
 import { checkoutPaymentLink, stripeObjectId } from './payment-link.js';
 import { stripeClient } from './stripe-client.js';
 import {
+  claimCheckoutAttempt,
   readPrivateBilling,
   resetPublicSubscription,
   resolveUnlinkedPublicSubscription,
@@ -37,6 +40,13 @@ function assertSubscriptionOwner(uid, privateBilling, subscription) {
   }
 }
 
+function trialContext(user) {
+  return {
+    authCreatedAt: user?.metadata?.creationTime || null,
+    trialEligibleSince: proTrialEligibleSince(),
+  };
+}
+
 async function retrieveSubscription(uid, knownPrivateBilling = null) {
   const privateBilling = knownPrivateBilling || await readPrivateBilling(uid);
   const subscriptionId = privateBilling?.stripeSubscriptionId;
@@ -59,7 +69,7 @@ async function retrieveSubscription(uid, knownPrivateBilling = null) {
   return { privateBilling, subscription };
 }
 
-async function retryCurrentSubscriptionStatus(uid, attempt) {
+async function retryCurrentSubscriptionStatus(uid, context, attempt) {
   if (attempt + 1 >= STATUS_BINDING_RETRIES) {
     throw new HttpError(
       503,
@@ -67,26 +77,26 @@ async function retryCurrentSubscriptionStatus(uid, attempt) {
       'A assinatura mudou durante a verificacao. Tente novamente.',
     );
   }
-  return currentSubscriptionStatus(uid, attempt + 1);
+  return currentSubscriptionStatus(uid, context, attempt + 1);
 }
 
-async function resetOrRetryStatus(uid, privateBilling, attempt) {
+async function resetOrRetryStatus(uid, privateBilling, context, attempt) {
   const reset = await resetPublicSubscription(uid, privateBilling);
   if (!reset.bindingChanged) return reset.subscription;
-  return retryCurrentSubscriptionStatus(uid, attempt);
+  return retryCurrentSubscriptionStatus(uid, context, attempt);
 }
 
-async function currentSubscriptionStatus(uid, attempt = 0) {
+async function currentSubscriptionStatus(uid, context, attempt = 0) {
   let privateBilling = await readPrivateBilling(uid);
 
   if (!privateBilling) {
-    const resolution = await resolveUnlinkedPublicSubscription(uid);
+    const resolution = await resolveUnlinkedPublicSubscription(uid, context);
     if (!resolution.linked) return resolution.subscription;
     privateBilling = resolution.privateBilling;
   }
 
   if (!privateBilling?.stripeSubscriptionId) {
-    return resetOrRetryStatus(uid, privateBilling, attempt);
+    return resetOrRetryStatus(uid, privateBilling, context, attempt);
   }
 
   try {
@@ -100,11 +110,11 @@ async function currentSubscriptionStatus(uid, attempt = 0) {
       retrievedPrivateBilling,
       { action: 'status', actorUid: uid },
     );
-    if (synchronized.bindingChanged) return retryCurrentSubscriptionStatus(uid, attempt);
+    if (synchronized.bindingChanged) return retryCurrentSubscriptionStatus(uid, context, attempt);
     return synchronized.subscription;
   } catch (error) {
     if (error instanceof HttpError && error.code === 'subscription_not_found') {
-      return resetOrRetryStatus(uid, privateBilling, attempt);
+      return resetOrRetryStatus(uid, privateBilling, context, attempt);
     }
     throw error;
   }
@@ -146,7 +156,7 @@ export async function checkout(request) {
 
   let privateBilling = await readPrivateBilling(token.uid);
   if (!privateBilling) {
-    const resolution = await resolveUnlinkedPublicSubscription(token.uid);
+    const resolution = await resolveUnlinkedPublicSubscription(token.uid, trialContext(user));
     if (!resolution.linked && resolution.subscription?.provider === 'legacy') {
       throw new HttpError(
         409,
@@ -169,12 +179,28 @@ export async function checkout(request) {
     }
   }
 
-  return json({ url: checkoutPaymentLink(token.uid, user.email) });
+  const attemptId = randomUUID();
+  const url = checkoutPaymentLink(token.uid, user.email, { attemptId });
+  const attempt = await claimCheckoutAttempt(token.uid, attemptId);
+  if (!attempt.claimed) {
+    throw new HttpError(
+      409,
+      'checkout_already_open',
+      'Um checkout foi aberto recentemente. Use a aba de pagamento existente ou aguarde alguns minutos.',
+    );
+  }
+
+  return json({ url });
 }
 
 export async function status(request) {
   const token = await requireUser(request);
-  return json({ subscription: await currentSubscriptionStatus(token.uid) });
+  const user = await canonicalUser(token.uid);
+  const subscription = await currentSubscriptionStatus(token.uid, trialContext(user));
+  return json({
+    subscription,
+    serverNow: new Date().toISOString(),
+  });
 }
 
 export async function portal(request) {
