@@ -1,6 +1,6 @@
-# Financas
+# Mr Coin
 
-Sistema web para controle financeiro pessoal e de pequenos negocios, com autenticação Firebase, dados separados por usuario no Firestore e publicacao via Firebase Hosting.
+Sistema web para controle financeiro pessoal e de pequenos negocios, com autenticação Firebase, dados separados por usuario no Firestore, cobranca recorrente pelo Stripe e publicacao via Firebase Hosting.
 
 ## Site publicado
 
@@ -18,6 +18,7 @@ Acesse o projeto em: [https://financas-ed7aa.firebaseapp.com/](https://financas-
 - Agendamentos mensais
 - Categorias personalizadas
 - Plano Free e Pro
+- Checkout, portal e cancelamento de assinatura integrados ao Stripe
 - Exportacao CSV, backup e importacao JSON para usuarios Pro
 - Perfil com foto, tema e preferencias
 - Dados isolados por usuario em `users/{uid}/finance/current`
@@ -29,6 +30,8 @@ Acesse o projeto em: [https://financas-ed7aa.firebaseapp.com/](https://financas-
 - Firebase Authentication
 - Cloud Firestore
 - Firebase Hosting
+- Netlify Functions para o backend de assinatura
+- Stripe Billing
 - Chart.js
 - Python + SQLite como backend local alternativo
 
@@ -49,11 +52,14 @@ cp .env.example .env
 Configure as variaveis:
 
 ```env
-VITE_PRO_CHECKOUT_URL=https://seu-link-de-checkout.com/plano-pro
-VITE_PAYMENT_SUPPORT_URL=https://wa.me/5500000000000
+VITE_BILLING_API_URL=https://seu-backend.netlify.app
+VITE_PAYMENT_SUPPORT_URL=https://wa.me/SEU_NUMERO_COM_DDI
 VITE_PIX_KEY=sua-chave-pix
-VITE_ADMIN_ACTIVATION_CODE=troque-este-codigo
 ```
+
+`VITE_BILLING_API_URL` deve conter somente a origem publica do projeto Netlify, sem `/api` no final. O frontend acrescenta os caminhos `/api/billing/checkout`, `/api/billing/portal`, `/api/billing/cancel`, `/api/billing/resume` e `/api/billing/status`.
+
+Variaveis com o prefixo `VITE_` ficam publicas no JavaScript do navegador. Nunca coloque nelas chaves `sk_...`, credenciais do Firebase Admin, segredos de webhook ou qualquer outro valor privado.
 
 Inicie o ambiente de desenvolvimento:
 
@@ -69,11 +75,104 @@ Para gerar a versao de producao:
 npm run build
 ```
 
+Para validar o contrato do backend e as oito Functions:
+
+```bash
+npm test
+```
+
 Para visualizar o build localmente:
 
 ```bash
 npm run preview
 ```
+
+## Backend de assinatura
+
+O frontend permanece no Firebase Hosting e o backend de assinatura e executado pelas Netlify Functions em `netlify/functions`. Essa separacao permite receber webhooks do Stripe e usar o Firebase Admin SDK sem ativar o Firebase Blaze.
+
+As rotas de usuario exigem `Authorization: Bearer <Firebase ID token>`:
+
+| Metodo | Rota | Finalidade |
+| --- | --- | --- |
+| `GET` | `/api/billing/status` | Sincronizar e consultar a assinatura atual |
+| `POST` | `/api/billing/checkout` | Abrir o checkout Pro vinculado ao usuario |
+| `POST` | `/api/billing/portal` | Abrir o Customer Portal do Stripe |
+| `POST` | `/api/billing/cancel` | Agendar cancelamento para o fim do periodo pago |
+| `POST` | `/api/billing/resume` | Desfazer um cancelamento ainda nao efetivado |
+
+O cancelamento administrativo usa `POST /api/admin/subscriptions/{uid}/cancel`, tambem agenda o fim da assinatura no Stripe e exige `admin: true` nos custom claims ou que o UID de quem faz a chamada esteja em `ADMIN_UIDS`. Nao basta mudar o plano no Console Firebase: isso removeria apenas o acesso local e nao interromperia a cobranca.
+
+Usuarios que ja tinham sido ativados como Pro pelo fluxo manual anterior sao mantidos automaticamente como `provider: legacy`. O backend reconhece somente o formato historico valido (`plan: pro`, `status: active`, `upgradedAt` valido e nenhum vinculo Stripe), normaliza o estado para `entitled: true` e `canManage: false` e preserva o acesso aos recursos Pro. Como esse acesso legado nao possui renovacao nem cobranca recorrente no Stripe, ele nao abre o portal e nao oferece acao de cancelamento. Registros Stripe orfaos ou contraditorios nao sao convertidos em legado.
+
+O arquivo `netlify.toml` configura a pasta das Functions, o bundler e o Node.js 22. No painel da Netlify, configure tambem `AWS_LAMBDA_JS_RUNTIME=nodejs22.x` e cadastre estas variaveis com escopo de Functions:
+
+```text
+STRIPE_SECRET_KEY
+STRIPE_WEBHOOK_SECRET
+STRIPE_PAYMENT_LINK_URL
+FIREBASE_PROJECT_ID
+FIREBASE_CLIENT_EMAIL
+FIREBASE_PRIVATE_KEY
+APP_URL
+FRONTEND_ORIGINS
+ADMIN_UIDS
+```
+
+`ADMIN_UIDS` e opcional e aceita UIDs do Firebase Auth separados por virgula. `FRONTEND_ORIGINS` aceita as origens permitidas por CORS, tambem separadas por virgula. Use `backend/.env.example` somente como referencia de nomes; os valores reais devem permanecer nas variaveis protegidas da Netlify e nunca devem ser enviados ao Git.
+
+Depois do deploy, configure no Stripe o webhook HTTPS:
+
+```text
+https://seu-backend.netlify.app/api/stripe/webhook
+```
+
+Cadastre somente os eventos processados pelo backend:
+
+```text
+checkout.session.completed
+customer.subscription.created
+customer.subscription.updated
+customer.subscription.deleted
+invoice.paid
+invoice.payment_failed
+```
+
+`STRIPE_PAYMENT_LINK_URL` precisa ser exatamente o mesmo Payment Link que gera a sessao de checkout. Uma sessao criada por outro link nao deve liberar o plano Pro.
+
+Cada clique em **Assinar plano Pro** recebe um identificador `utm_content` unico e abre o checkout em uma nova aba. Isso mantem o site disponivel e evita que o navegador restaure uma Checkout Session individual antiga, que pode estar expirada.
+
+No Payment Link, configure o comportamento depois do pagamento para redirecionar ao site:
+
+```text
+https://financas-ed7aa.web.app/?billing=success#assinatura
+```
+
+### Ordem da primeira publicacao
+
+1. Crie um site gratuito na Netlify apontando para este projeto.
+2. No Firebase Console, em **Configuracoes do projeto > Contas de servico**, gere uma chave do Firebase Admin. Copie `project_id`, `client_email` e `private_key` para as variaveis protegidas da Netlify; nunca envie o JSON pelo chat nem grave-o no repositorio.
+3. Cadastre as demais variaveis da Netlify. Em producao, use a chave secreta Stripe `sk_live_...`, o Payment Link ao vivo e `FRONTEND_ORIGINS=https://financas-ed7aa.web.app,https://financas-ed7aa.firebaseapp.com`.
+4. Faca o primeiro deploy da Netlify e copie a origem recebida, por exemplo `https://mr-coin-billing.netlify.app`.
+5. No Stripe em modo ao vivo, crie o webhook com a URL `/api/stripe/webhook` e os seis eventos listados acima. Copie o novo `whsec_...` para `STRIPE_WEBHOOK_SECRET` na Netlify e publique novamente.
+6. No `.env` local, defina `VITE_BILLING_API_URL` com a origem da Netlify, sem `/api`, e publique Hosting + regras do Firestore pelo comando da secao Firebase.
+
+As chaves `sk_live_...`, `whsec_...` e a chave privada do Firebase devem ser digitadas diretamente nos paineis protegidos. O frontend precisa somente de `VITE_BILLING_API_URL`; nenhuma chave secreta pode usar o prefixo `VITE_`.
+
+O endpoint de saude pode ser usado para conferir o deploy:
+
+```text
+GET https://seu-backend.netlify.app/api/billing/health
+```
+
+Para testar localmente com a Netlify CLI e a Stripe CLI:
+
+```bash
+netlify dev
+stripe listen --forward-to http://localhost:8888/api/stripe/webhook
+```
+
+Use o segredo `whsec_...` exibido pela Stripe CLI apenas no ambiente local. O comando `stripe trigger checkout.session.completed` nao inclui necessariamente o Payment Link e o UID esperados pelo Mr Coin; valide o fluxo completo abrindo o checkout de teste por `/api/billing/checkout`. O webhook deve validar a assinatura sobre o corpo bruto, processar cada `event.id` de forma idempotente e nao depender da ordem de entrega dos eventos.
 
 ## Firebase
 
@@ -89,7 +188,7 @@ Servicos usados:
 - Firebase Authentication
 - Cloud Firestore
 
-O banco Firestore padrao `(default)` usa regras versionadas em `firestore.rules`, permitindo que cada usuario leia e altere apenas seus proprios dados.
+O banco Firestore padrao `(default)` usa regras versionadas em `firestore.rules`. Cada usuario pode ler e alterar os proprios dados financeiros, mas nao pode alterar nem apagar `users/{uid}/finance/current.subscription`. Um documento novo pode omitir esse mapa (o backend interpreta a ausencia como Free) ou grava-lo somente com o estado Free neutro. Depois disso, apenas o backend com Firebase Admin SDK pode ativar, cancelar ou reativar o plano Pro. O Admin SDK ignora as regras do cliente, por isso suas credenciais devem existir apenas no backend.
 
 Antes de publicar, confirme no Console Firebase que o provedor `E-mail/Senha` esta ativo em Authentication > Sign-in method.
 
@@ -105,9 +204,15 @@ Deploy somente do Hosting:
 firebase deploy --only hosting --project financas-ed7aa
 ```
 
+Deploy somente das regras do Firestore:
+
+```bash
+firebase deploy --only firestore:rules --project financas-ed7aa
+```
+
 ## Backend Python
 
-A pasta `backend` contem uma API local com SQLite, mantida como alternativa para testes locais. O frontend publicado usa Firebase diretamente.
+A pasta `backend` contem uma API local com SQLite, mantida como alternativa para testes locais. Ela nao processa pagamentos; o backend de assinatura publicado usa as Netlify Functions.
 
 Para executar:
 
@@ -120,6 +225,7 @@ python backend/server.py
 ```text
 .
 ├── backend/              # API local alternativa em Python + SQLite
+├── netlify/functions/    # API segura de assinatura e webhook do Stripe
 ├── src/                  # Aplicacao React
 │   ├── App.jsx           # Telas, regras de negocio e integracao com Firestore
 │   ├── firebase.js       # Configuracao Firebase
@@ -128,6 +234,7 @@ python backend/server.py
 ├── firebase.json         # Configuracao do Firebase Hosting e Firestore
 ├── firestore.rules       # Regras de seguranca do Firestore
 ├── firestore.indexes.json
+├── netlify.toml          # Build e runtime das Netlify Functions
 ├── package.json
 └── vite.config.js
 ```
@@ -140,7 +247,10 @@ Estes arquivos e pastas nao sobem para o GitHub porque sao gerados localmente ou
 - `dist`
 - `.env`
 - `.firebase`
+- `.netlify`
 - `firebase-debug.log`
 - `vite-dev*.log`
 - `backend/financas.db`
 - `backend/__pycache__/`
+- `backend/.env*` (exceto `backend/.env.example`)
+- credenciais JSON de service account dentro de `backend/`

@@ -2,11 +2,107 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
 
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+    function hasValidInitialSubscription(data) {
+      return !data.keys().hasAny(['subscription'])
+        || (
+          data.subscription is map
+          && data.subscription.keys().hasAll([
+            'plan',
+            'status'
+          ])
+          && data.subscription.keys().hasOnly([
+            'plan',
+            'status',
+            'checkoutStartedAt',
+            'upgradedAt',
+            'provider',
+            'stripeStatus',
+            'cancelAtPeriodEnd',
+            'currentPeriodEnd',
+            'cancelAt',
+            'canceledAt',
+            'syncedAt',
+            'entitled',
+            'canManage'
+          ])
+          && data.subscription.plan == 'free'
+          && data.subscription.status == 'active'
+          && (
+            !data.subscription.keys().hasAny(['checkoutStartedAt'])
+            || data.subscription.checkoutStartedAt == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['upgradedAt'])
+            || data.subscription.upgradedAt == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['provider'])
+            || data.subscription.provider == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['stripeStatus'])
+            || data.subscription.stripeStatus == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['cancelAtPeriodEnd'])
+            || data.subscription.cancelAtPeriodEnd == false
+          )
+          && (
+            !data.subscription.keys().hasAny(['currentPeriodEnd'])
+            || data.subscription.currentPeriodEnd == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['cancelAt'])
+            || data.subscription.cancelAt == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['canceledAt'])
+            || data.subscription.canceledAt == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['syncedAt'])
+            || data.subscription.syncedAt == null
+          )
+          && (
+            !data.subscription.keys().hasAny(['entitled'])
+            || data.subscription.entitled == null
+            || data.subscription.entitled == false
+          )
+          && (
+            !data.subscription.keys().hasAny(['canManage'])
+            || data.subscription.canManage == null
+            || data.subscription.canManage == false
+          )
+        );
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if isOwner(userId);
+
+      match /finance/current {
+        allow read: if isOwner(userId);
+
+        // A conta pode nascer sem o mapa de assinatura ou com o estado Free
+        // neutro. Depois disso, somente um backend usando o Firebase Admin SDK
+        // pode alterar o mapa `subscription`.
+        allow create: if isOwner(userId)
+          && hasValidInitialSubscription(request.resource.data);
+
+        allow update: if isOwner(userId)
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['subscription'])
+            || (
+              !resource.data.keys().hasAny(['subscription'])
+              && hasValidInitialSubscription(request.resource.data)
+            )
+          );
+
+        // Impede apagar e recriar o documento com uma assinatura adulterada.
+        allow delete: if false;
       }
     }
   }
